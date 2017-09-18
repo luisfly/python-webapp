@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+'This is a homework--day 1'
+
+__author__ = 'luisfly'
+
+
+
 import logging; logging.basicConfig(level=logging.INFO)
 
 # 导入各种模块
@@ -11,12 +17,14 @@ from datetime import datetime
 from aiohttp import web
 
 def index(request):
-	return web.Response(body=b'<h1>Awesome</h1>')
+	# 注意：此处的web.Response 必须要添加 content_type参数
+	# 否则 chrome将无法解析，进而直接将文件下载
+	return web.Response(body=b'<h1>Awesome</h1>',content_type='text/html')
 
 # 或者使用a
 # @asyncio.coroutine
 # def init():
-async init(loop):
+async def init(loop):
 	app = web.Application(loop=loop)
 	app.router.add_route('GET','/',index)
 	# 创建服务器端 地址为127.0.0.1 端口为9000
