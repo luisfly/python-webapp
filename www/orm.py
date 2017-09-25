@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# 本版本的orm缺少update remove find方法
+# 本版本的orm缺少update remove find方法, 未完成
 'This is a homework---day3'
 
 __author__ = 'luisfly'
@@ -10,6 +10,9 @@ import logging; logging.basicConfig(level=logging.INFO)
 import asyncio,aiomysql
 from aiohttp import web
 
+def log(sql, args=()):
+	logging.info('SQL: %s' % sql)
+
 # 数据库连接池创建
 async def create_pool(loop, **kw):
 	logging.info('create database connection pool...')
@@ -17,9 +20,9 @@ async def create_pool(loop, **kw):
 	__pool = await aiomysql.create_pool(
 		host=kw.get('host', 'localhost'),
 		port=kw.get('port', 3306),
-		user=kw['root'],
-		password=kw['1234'],
-		db=kw['test_for_python'],
+		user=kw['user'],
+		password=kw['password'],
+		db=kw['database'],
 		charset=kw.get('charset','utf8'),
 		autocommit=kw.get('autocommit', True),
 		maxsize=kw.get('maxsize', 10),
@@ -101,9 +104,10 @@ class ModelMetaclass(type):
 			raise RuntimeError('Primary key not found.')
 		for k in mappings.keys():
 			attrs.pop(k)
-		escaped_fields = list(map(lambda f: '’%s‘' % f, fields))
+		# 注意：反引号不要打错
+		escaped_fields = list(map(lambda f: '`%s`' % f, fields))
 		# attrs是元类导入的方法集合，往里面添加元素
-		attrs['__mapping__'] = mappings # 保存属性和列表的映射关系
+		attrs['__mappings__'] = mappings # 保存属性和列表的映射关系
 		attrs['__table__'] = tableName
 		attrs['__primary_key__'] = primaryKey # 主键属性名
 		attrs['__fields__'] = fields # 除主键外的属性名
@@ -143,7 +147,7 @@ class Model(dict, metaclass=ModelMetaclass):
 				value = field.default() if callable(field.default) else field.default
 				logging.debug('using default value for %s: %s' % (key, str(value)))
 				setattr(self, key, value)
-				return value
+		return value
 
 	# 实现查找
 	@classmethod
@@ -167,11 +171,41 @@ class Model(dict, metaclass=ModelMetaclass):
 	async def findAll(cls, where=None, args=None, **kw):
 		'find objects by where clause.'
 		sql = [cls.__select__]
+		if where:
+			sql.append('where')
+			sql.append(where)
+		if args is None:
+			args = []
+		orderBy = kw.get('limit', None)
+		if orderBy:
+			sql.append('order by')
+			sql.append(orderBy)
+		limit = kw.get('limit', None)
+		if limit is not None:
+			sql.append('limit')
+			if isinstance(limit, int):
+				sql.append('?')
+				args.append(limit)
+			elif isinstance(limit, tuple) and len(limit) == 2:
+				sql.append('?, ?')
+				args.extend(limit)
+			else:
+				raise ValueError('Invalid limit value: %s' % str(limit))
+		rs = await select(' '.join(sql), args)
+		return [cls(**r) for r in rs]
 
+	# 寻找数量
 	@classmethod
-	async def findNumber(cls, key, value):
+	async def findNumber(cls, selectField, where=None, args=None):
+		' find number by select an where'
+		sql = ['select % _num_ from `%s`' % (selectField, cls.__table__)]
+		if where:
+			sql.append('where')
+			sql.append(where)
 		rs = await select('%s where `%s`=?' % (cls.__count__, cls.__mapping__[key]), value)
-		return cls(**rs[0])
+		if len(rs) == 0:
+			return None
+		return rs[0]['_num_']
 
 	# 实现事务提交
 	async def save(self):
@@ -180,6 +214,23 @@ class Model(dict, metaclass=ModelMetaclass):
 		rows = await execute(self.__insert__, args)
 		if rows != 1:
 			logging.warn('failed to insert record: affected rows: %s' % rows)
+
+
+	# 更新
+	async def update(self):
+		args = list(map(self.getValue, self.__fields__))
+		args.append(self.getValue(self.__primary_key__))
+		rows = await execute(self.__update__, args)
+		if rows != 1:
+			logging.warn('failed to update by primary key: affected rows: %s' % rows)
+
+	# 根据主键来进行删除
+	# 若返回的结果不为1即为出现错误
+	async def remove(self):
+		args = [self.getValue(self.__primary_key__)]
+		rows = await exectue(self.__delete__, args)
+		if rows != 1:
+			logging.warn('failed to remove by primary key: affected rows: %s' % rows)
 
 # 属性Field的子类
 class Field(object):
@@ -200,34 +251,41 @@ class Field(object):
 # 映射varchar 的 StringField,继承Field
 class StringField(Field):
 	
+	# ddl是String的数据类型
 	def __init__(self, name=None, primary_key=False, default=None, ddl='varchar(100)'):
 		super().__init__(name, ddl, primary_key, default)
 
 # 映射int 的 IntegerField,继承Field
 class IntegerField(Field):
 
-	def __init__(self, name=None, primary_key=False, default=None):
+	def __init__(self, name=None, primary_key=False, default=0):
 		super().__init__(name, 'bigint', primary_key, default)
 
 # 映射 boolean 的 BooleanField
 class BooleanField(Field):
 
-	def __init__(self, name=None, primary_key=False, default=None):
+	def __init__(self, name=None, primary_key=False, default=False):
 		super().__init__(name, 'boolean', primary_key, default)
 
 # 映射 Float 的 FloatField
 class FloatField(Field):
 
-	def __init__(self, name=None, primary_key=False, default=None):
+	def __init__(self, name=None, primary_key=False, default=0.0):
 		super().__init__(name, 'real', primary_key, default)		
 
+# 映射 Text 的 TextField
+class TextField(Field):
+
+	def __init__(self, name=None, primary_key=False, default=None):
+		super().__init__(name, 'text', primary_key, default)
+
 # User 对象与数据库表users相关联
-class User(Model):
-	__table__ = 'users'
+# class User(Model):
+#	__table__ = 'users'
 
 	# id与name 为类属性，并非是实例属性
 	# 实例必须要利用__init__()进行初始化
-	id = IntegerField(primary_key=True)
-	name = StringField()
+#	id = IntegerField(primary_key=True)
+#	name = StringField()
 
-user = User(id=123, name='Michael')
+# user = User(id=123, name='Michael')
