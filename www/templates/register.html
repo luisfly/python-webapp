@@ -1,0 +1,115 @@
+{% extends '__base__.html' %}
+
+{% block title %}注册{% endblock %}
+
+{% block beforehead %}
+
+<script>
+
+function validateEmail(email) {
+	var re = /^[a-z0-9\.\-\_]+\@[a-z0-9\-\_]+(\.[a-z0-9\-\_]+){1,4}$/;
+	return re.test(email.toLowerCase());
+}
+
+// function的作用检查表单的数据是否符合要求
+// 如果不符合要求，则返回相应的错误通知
+// 打的时候仔细点，如果不是很难发现错误
+// 仔细仔细
+$(function () {
+	// 整个函数其实只是
+	// 一个对象的新建，后面都是参数
+	var vm = new Vue({
+		el: '#vm',
+		data: {
+			name: '',
+			email: '',
+			password1: '',
+			password2: ''
+		},
+		methods: {
+			// 获取表单信息
+			submit: function (event) {
+				event.preventDefault();
+				var $form = $('#vm');
+				// trim方法查询
+				if (! this.name.trim()) {
+					return $form.showFormError('请输入名字');
+				}
+				if (! validateEmail(this.email.trim().toLowerCase())) {
+					return $form.showFormError('请输入正确的Email地址');
+				}
+				if (this.password1.length < 6) {
+					return $form.showFormError('口令长度至少为6个字符');
+				}
+				// js不等于表示为 !==
+				if (this.password1 !== this.password2) {
+					return $form.showFormError('两次输入的口令不一致');
+				}
+				var email = this.email.trim().toLowerCase();
+				$form.postJSON('/api/users', {
+					name: this.name.trim(),
+					email: email,
+					passwd: CryptoJS.SHA1(email + ':' + this.password1).toString()
+				}, function (err, r) {
+					if (err) {
+						return $form.showFormError(err);
+					}
+					return location.assign('/');
+				});
+			}
+		}
+	});
+	//井号！！
+	$('#vm').show();
+});
+
+</script>
+
+{% endblock %}
+
+{% block content %}
+<!-- 注册界面设计 -->
+<!-- div标签 属性总结: class是为了对应 css 样式表的类，让其正确显示
+	 form标签 属性总结: class的作用一样
+	 				  v-on 应该是反映表的类
+	 input标签 属性总结： v-model 新建标签名字
+	 					maxlength 长度
+	 					type label的类型，浏览器会自动进行相应的处理
+	 					placeholder 在标签初始时出现的字
+-->
+
+	<div class="uk-width-2-3">
+		<h1>欢迎注册！</h1>
+		<form id="vm" v-on="submit: submit" class="uk-form uk-form-stacked">
+			<div class="uk-alert uk-alert-danger uk-hidden"></div>
+			<div class="uk-form-row">
+				<label class="uk-form-label">名字：</label>
+				<div class="uk-form-controls">
+					<input v-model="name" type="text" maxlength="50" placeholder="名字" class="uk-width-1-1">
+				</div>
+			</div>
+			<div class="uk-form-row">
+				<label class="uk-form-label">电子邮件：</label>
+				<div class="uk-form-controls">
+					<input v-model="email" type="text" maxlength="50" placeholder="your-name@example.com" class="uk-width-1-1"
+				</div>
+			</div>
+			<div class="uk-form-row">
+				<label class="uk-form-label">输入口令：</label>
+				<div class="uk-form-controls">
+					<input v-model="password1" type="password" maxlength="50" placeholder="输入口令" class="uk-width-1-1">
+				</div>
+			</div>
+			<div class="uk-form-row">
+				<label class="uk-form-labe">重复口令：</label>
+				<div class="uk-form-controls">
+					<input v-model="password2" type="password" maxlength="50" placeholder="重复口令" class="uk-width-1-1">
+				</div>
+			</div>
+			<div class="uk-form-row">
+				<button type="submit" class="uk-button uk-button-primary"><i class="uk-icon-user"></i>注册</button>
+			</div>
+		</form>
+	</div>
+
+{% endblock %}

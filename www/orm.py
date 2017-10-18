@@ -17,6 +17,8 @@ def log(sql, args=()):
 async def create_pool(loop, **kw):
 	logging.info('create database connection pool...')
 	global __pool
+	# 连接池创建行数 aiomysql.create_pool
+	# 导入数据库连接的参数
 	__pool = await aiomysql.create_pool(
 		host=kw.get('host', 'localhost'),
 		port=kw.get('port', 3306),
@@ -34,13 +36,17 @@ async def create_pool(loop, **kw):
 async def select(sql, args, size=None):
 	log(sql, args)
 	global __pool
+	# 建立线程池 访问
 	with (await __pool) as conn:
 		cur = await conn.cursor(aiomysql.DictCursor)
 		# 带参数的 sql语句，并非是 sql语句拼接
+		# 防止注入式攻击
 		await cur.execute(sql.replace('?', '%s'), args or ())
 		if size:
+			# 接受参数 即显示查询结果
 			rs = await cur.fetchmany(size)
 		else:
+			# 查询所有
 			rs = await cur.fetchall()
 		await cur.close()
 		logging.info('rows returned: %s' % len(rs))
@@ -49,9 +55,13 @@ async def select(sql, args, size=None):
 # insert,update,delete语句配置工作
 async def execute(sql, args):
 	log(sql)
+	# 建立线程池
 	with (await __pool) as conn:
 		try:
+			# cur 为 conn 获取连接后返回的操作对象
+			# conn.cursor() 获取处理对象
 			cur = await conn.cursor()
+			# cur
 			await cur.execute(sql.replace('?', '%s'), args)
 			# 通过 rowcount返回结果
 			affected = cur.rowcount
@@ -60,6 +70,7 @@ async def execute(sql, args):
 			raise
 		return affected
 
+# 创建 指定的字符串
 def create_args_string(num):
 	L = []
 	for n in range(num):
@@ -75,7 +86,9 @@ def create_args_string(num):
 # 	id = IntegerField(primary_key=True)
 #	name = StringField()
 
-# Model通过 metaclass 将User的映射信息读取 		
+# Model通过 metaclass 将User的映射信息读取 
+# ModelMetaclass 为元类
+# 是创建 Model 的基础		
 class ModelMetaclass(type):
 
 	def __new__(cls, name, bases, attrs):
@@ -89,26 +102,35 @@ class ModelMetaclass(type):
 		mappings = dict()
 		fields = []
 		primaryKey = None
+		# attrs 应该是一个 dict
+		# 可以通过迭代器获取所有对象
 		for k, v in attrs.items():
 			if isinstance(v, Field):
 				logging.info('	found mapping: %s ==> %s' % (k, v))
 				mappings[k] = v
+				# v.priamry_key 判断当前属性是否是主键
 				if v.primary_key:
-					# 找到主键
+					# 如果主键在之前就已经有一个被找到了
+					# 系统报错
+					# 因为主键只能有一个
 					if primaryKey:
 						raise RuntimeError('Duplicate primary key for filed: %s' % k)
+					# 第一次找到主键
+					# 将 primarykey 的值设置为 主键所谓位于的参数位置
 					primaryKey = k
 				else:
 					fields.append(k)
+		# 找不到主键
+		# 报错
 		if not primaryKey:
 			raise RuntimeError('Primary key not found.')
 		for k in mappings.keys():
 			attrs.pop(k)
 		# 注意：反引号不要打错
 		escaped_fields = list(map(lambda f: '`%s`' % f, fields))
-		# attrs是元类导入的方法集合，往里面添加元素
+		# attrs是元类导入的方法、类属性集合，往里面添加元素
 		attrs['__mappings__'] = mappings # 保存属性和列表的映射关系
-		attrs['__table__'] = tableName
+		attrs['__table__'] = tableName	# 保存表名称
 		attrs['__primary_key__'] = primaryKey # 主键属性名
 		attrs['__fields__'] = fields # 除主键外的属性名
         # 构造默认的SELECT, INSERT, UPDATE和DELETE语句:
@@ -121,28 +143,38 @@ class ModelMetaclass(type):
 		return type.__new__(cls, name, bases, attrs)
 
 
-# ORM Model 
+# ORM Model 基类
+# 所有表的对应的对象基类
+# 使用 ModelMetalclass 的元类 继承 dict 类
+# 元类使用时类似下列 在参数中添加 metalclass 参数
 class Model(dict, metaclass=ModelMetaclass):
 
 	def __init__(self, **kw):
 		super(Model, self).__init__(**kw)
 
+	# 获取属性时 可使用 类名.属性
+	# 当属型不存在的时候
+	# 返回错误信息
 	def __getattr__(self, key):
 		try:
 			return self[key]
 		except KeyError:
 			raise AttributeError(r"'Model' object has no attribute '%s'" % key)
 
+	# 和 getattr 相类似
 	def __setattr__(self, key, value):
 		self[key] = value
 
 	def getValue(self, key):
 		return getattr(self, key, None)
 
+	# 获取默认值
 	def getValueOrDefault(self, key):
 		value = getattr(self, key, None)
 		if value is None:
 			field = self.__mappings__[key]
+			# 如果属性 field 的拥有默认值
+			# 获取默认值，并赋予 field
 			if field.default is not None:
 				value = field.default() if callable(field.default) else field.default
 				logging.debug('using default value for %s: %s' % (key, str(value)))
@@ -150,10 +182,14 @@ class Model(dict, metaclass=ModelMetaclass):
 		return value
 
 	# 实现查找
+	# 通过主键进行查找
 	@classmethod
 	async def find(cls, pk):
 		' find object by primary key.'
-		rs = await select('%s where `%s`=?' % (cls.__select__, cls._primary_key__), [pk], 1)
+		# 语句拼凑
+		rs = await select('%s where `%s`=?' % (cls.__select__, cls.__primary_key__), [pk], 1)
+		# 如果返回结果数量为 0
+		# 则返回 None
 		if len(rs) == 0:
 			return None
 		return cls(**rs[0])
@@ -167,19 +203,27 @@ class Model(dict, metaclass=ModelMetaclass):
 #		if len(rs) == 0:
 #			return None
 #		return cls(**rs)
+	# 查找多个结果
 	@classmethod
 	async def findAll(cls, where=None, args=None, **kw):
 		'find objects by where clause.'
 		sql = [cls.__select__]
+		# 如果带有 where 参数
+		# 自动延伸 sql 语句
 		if where:
 			sql.append('where')
 			sql.append(where)
+		# 如果不带有其他参数
+		# args 设为 空 dict []
 		if args is None:
 			args = []
-		orderBy = kw.get('limit', None)
+		# 获取参数 看是否有 orderBy 属性
+		orderBy = kw.get('orderBy', None)
 		if orderBy:
 			sql.append('order by')
 			sql.append(orderBy)
+		# 查看是否有 limit 属性
+		# 具体操作如上面 where
 		limit = kw.get('limit', None)
 		if limit is not None:
 			sql.append('limit')
@@ -198,11 +242,12 @@ class Model(dict, metaclass=ModelMetaclass):
 	@classmethod
 	async def findNumber(cls, selectField, where=None, args=None):
 		' find number by select an where'
-		sql = ['select % _num_ from `%s`' % (selectField, cls.__table__)]
+		sql = ['select %s _num_ from `%s`' % (selectField, cls.__table__)]
 		if where:
 			sql.append('where')
 			sql.append(where)
-		rs = await select('%s where `%s`=?' % (cls.__count__, cls.__mapping__[key]), value)
+		#rs = await select('%s where `%s`=?' % (cls.__count__, cls.__mapping__[key]), value)
+		rs = await select(''.join(sql), args, 1)
 		if len(rs) == 0:
 			return None
 		return rs[0]['_num_']

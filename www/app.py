@@ -20,6 +20,12 @@ from jinja2 import Environment, FileSystemLoader
 import orm
 from coroweb import add_routes, add_static
 
+from handlers import cookie2user, COOKIE_NAME
+
+# 本本件主要是负责 html 模板获取
+# 以及 cookie 获取 后续操作
+
+
 # 初始化 jinja2
 def init_jinja2(app, **kw):
 	logging.info('init jinja2...')
@@ -56,6 +62,26 @@ async def logger_factory(app, handler):
 		# await asyncio.sleep(0.3)
 		return (await handler(request))
 	return logger
+
+# 解析 cookie生成 request.__user__ 对象
+# 这里同时内置了权限管理，当当前 cookie 中的登录用户非管理员时
+# 该用户将无法进入 blog 修改界面
+async def auth_factory(app, handler):
+	async def auth(request):
+		logging.info('check user: %s %s' % (request.method, request.path))
+		request.__user__ = None
+		# 获取 cookie 数据
+		cookie_str = request.cookies.get(COOKIE_NAME)
+		if cookie_str:
+			user = await cookie2user(cookie_str)
+			if user:
+				logging.info('set current user: %s' % user.email)
+				request.__user__ = user
+		# requset.__user__.admin 就是判断当前用户是否是管理员
+		if request.path.startswith('/manage/') and (request.__user__ is None or not request.__user__.admin):
+			return web.HTTPFound('/signin')
+		return (await handler(request))
+	return auth
 
 # 数据工厂
 async def data_factory(app, handler):
@@ -100,6 +126,8 @@ async def response_factory(app, handler):
 				resp.content_type = 'application/json;charset=utf-8'
 				return resp
 			else:
+				# 第一句与登录密切相关 r是 增加 post 中的参数数量
+				r['__user__'] = request.__user__
 				resp = web.Response(body=app['__templating__'].get_template(template).render(**r).encode('utf-8'))
 				resp.content_type = 'text/html;charset=utf-8'
 				return resp
@@ -129,10 +157,12 @@ def datetime_filter(t):
 	dt = datetime.fromtimestamp(t)
 	return u'%s年%s月%s日' % (dt.year, dt.month, dt.day)
 
+# 初始化
 async def init(loop):
+	# 创建线程池
 	await orm.create_pool(loop=loop, host='localhost', port=3306, user='myadmin', password='1234', database='awesome')
 	app = web.Application(loop=loop, middlewares=[
-		logger_factory, response_factory
+		logger_factory, auth_factory, response_factory
 	])
 	# 初始化前端模板，并把模板绑定到 app的属性中
 	init_jinja2(app, filters=dict(datetime=datetime_filter))
